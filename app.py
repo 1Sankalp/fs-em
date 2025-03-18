@@ -36,7 +36,7 @@ def extract_emails_from_website(url):
         return ""
 
 # UI
-st.title("FunnelStrike's Website Email Extractor")
+st.title("Email Extractor from Websites")
 st.write("Paste your **Google Sheet link** (it must have a 'Website' column):")
 
 # Input field for Google Sheet link
@@ -80,26 +80,36 @@ if sheet_url:
             # Display results in scrollable container
             st.dataframe(results_df, height=300)
 
-            # Prepare data for copying
+            # Convert to tab-separated values (works well in Google Sheets)
             output_str = "Website\tEmails\n" + "\n".join(
                 [f"{row['Website']}\t{row['Emails']}" for _, row in results_df.iterrows()]
             )
 
-            # JavaScript Clipboard Button
-            st.write("Click below to copy extracted emails to clipboard:")
-            st.button("📋 Copy to Clipboard", key="copy_btn")
-            
+            # Create a hidden text area for copying data (Streamlit workaround)
+            st.text_area("Copy the data below:", output_str, height=150)
+
+            # Copy to clipboard button (New approach)
             st.markdown(
                 f"""
+                <button id="copy_btn" style="padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; border-radius: 5px;">
+                    📋 Copy to Clipboard
+                </button>
+                <p id="copy_status" style="color: green; display: none;">✅ Copied!</p>
+                
                 <script>
-                function copyToClipboard(text) {{
-                    navigator.clipboard.writeText(text).then(() => {{
-                        alert('Copied to clipboard!');
-                    }});
-                }}
-                document.getElementById("copy_btn").onclick = function() {{
-                    copyToClipboard(`{output_str}`);
-                }};
+                document.getElementById("copy_btn").addEventListener("click", function() {{
+                    var textArea = document.createElement("textarea");
+                    textArea.value = `{output_str}`;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(textArea);
+                    
+                    document.getElementById("copy_status").style.display = "block";
+                    setTimeout(() => {{
+                        document.getElementById("copy_status").style.display = "none";
+                    }}, 2000);
+                }});
                 </script>
                 """,
                 unsafe_allow_html=True
