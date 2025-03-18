@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import httpx
 import re
+import io
 
 st.set_page_config(page_title="Email Extractor", layout="centered")
 
@@ -85,32 +86,15 @@ if sheet_url:
                 [f"{row['Website']}\t{row['Emails']}" for _, row in results_df.iterrows()]
             )
 
-            # Create a hidden text area for copying data (Streamlit workaround)
+            # Copy button using Streamlit workaround
             st.text_area("Copy the data below:", output_str, height=150)
 
-            # Copy to clipboard button (New approach)
-            st.markdown(
-                f"""
-                <button id="copy_btn" style="padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; border-radius: 5px;">
-                    📋 Copy to Clipboard
-                </button>
-                <p id="copy_status" style="color: green; display: none;">✅ Copied!</p>
-                
-                <script>
-                document.getElementById("copy_btn").addEventListener("click", function() {{
-                    var textArea = document.createElement("textarea");
-                    textArea.value = `{output_str}`;
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    document.execCommand("copy");
-                    document.body.removeChild(textArea);
-                    
-                    document.getElementById("copy_status").style.display = "block";
-                    setTimeout(() => {{
-                        document.getElementById("copy_status").style.display = "none";
-                    }}, 2000);
-                }});
-                </script>
-                """,
-                unsafe_allow_html=True
+            # Download CSV button
+            csv_buffer = io.StringIO()
+            results_df.to_csv(csv_buffer, index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_buffer.getvalue(),
+                file_name="extracted_emails.csv",
+                mime="text/csv"
             )
