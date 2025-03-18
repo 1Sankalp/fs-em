@@ -36,7 +36,7 @@ def extract_emails_from_website(url):
         return ""
 
 # UI
-st.title("Email Extractor from Websites")
+st.title("FunnelStrike's Website Email Extractor")
 st.write("Paste your **Google Sheet link** (it must have a 'Website' column):")
 
 # Input field for Google Sheet link
