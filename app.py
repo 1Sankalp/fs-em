@@ -32,55 +32,43 @@ def load_google_sheet(sheet_url):
 def extract_emails(text):
     return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
 
-# Extract emails from a single webpage
-def extract_emails_from_page(url):
+# Extract emails from a webpage within the time limit
+def extract_emails_with_timeout(url, time_limit=60):
+    start_time = time.time()
+    emails_found = set()
     headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
-        response = httpx.get(url, timeout=10, follow_redirects=True, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
-        
-        emails = extract_emails(response.text)
-        metadata_emails = extract_emails(str(soup.find_all("meta")))
-        comment_emails = extract_emails(" ".join([str(c) for c in soup.find_all(string=lambda t: isinstance(t, str) and t.startswith("<!--"))]))
-        script_emails = extract_emails(" ".join([str(s) for s in soup.find_all("script")]))
-        mailto_emails = extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]]))
+        with httpx.Client(timeout=10, follow_redirects=True) as client:
+            response = client.get(url, headers=headers)
+            soup = BeautifulSoup(response.text, "html.parser")
 
-        return emails.union(metadata_emails, comment_emails, script_emails, mailto_emails)
+            emails_found.update(extract_emails(response.text))
+            emails_found.update(extract_emails(str(soup.find_all("meta"))))
+            emails_found.update(extract_emails(" ".join([str(s) for s in soup.find_all("script")])))
+            emails_found.update(extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]])))
 
+            # Stop if time exceeded
+            if time.time() - start_time > time_limit:
+                return set()
+
+            # Find internal links & crawl them within time
+            domain = urlparse(url).netloc
+            internal_links = [urljoin(url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
+
+            for link in internal_links:
+                if time.time() - start_time > time_limit:
+                    break  # Stop processing if time exceeded
+                try:
+                    response = client.get(link, headers=headers)
+                    emails_found.update(extract_emails(response.text))
+                except Exception:
+                    pass  # Ignore broken links
+            
     except Exception:
         return set()
 
-# Crawl internal links to find more emails
-def crawl_emails(url, depth=1, time_limit=60):
-    visited, emails = set(), set()
-    start_time = time.time()
-
-    def fetch_emails(page_url, level):
-        if level > depth or page_url in visited or (time.time() - start_time) > time_limit:
-            return
-        visited.add(page_url)
-
-        found_emails = extract_emails_from_page(page_url)
-        emails.update(found_emails)
-
-        # Stop crawling if time limit exceeded
-        if (time.time() - start_time) > time_limit:
-            return
-
-        # Find more links on the same domain
-        try:
-            response = httpx.get(page_url, timeout=10, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-            soup = BeautifulSoup(response.text, "html.parser")
-            domain = urlparse(url).netloc
-            internal_links = [urljoin(page_url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
-            
-            for link in internal_links:
-                fetch_emails(link, level + 1)
-        except Exception:
-            pass
-
-    fetch_emails(url, 0)
-    return emails
+    return emails_found
 
 # Main UI
 st.title("FunnelStrike's Email Extractor")
@@ -107,23 +95,22 @@ if sheet_url:
             time_text = st.empty()
 
             start_overall_time = time.time()
-            estimated_time_per_website = 10  # Initial estimate
 
             for idx, website in enumerate(websites):
                 start_time = time.time()
-                emails = crawl_emails(website, depth=1, time_limit=60)  # 1 min per website
+                emails = extract_emails_with_timeout(website, time_limit=60)  # 1 min per website
                 
                 # If timeout, show warning
-                if (time.time() - start_time) >= 60:
+                if time.time() - start_time >= 60:
                     st.warning(f"⚠️ Skipped {website} (took too long)")
 
                 email_count = len(emails)
                 total_emails_extracted += email_count
                 results.append({"Website": website, "Emails": ", ".join(emails)})
 
-                # Calculate estimated remaining time
-                time_spent = time.time() - start_overall_time
-                estimated_time_per_website = time_spent / (idx + 1)
+                # Estimate remaining time
+                elapsed_time = time.time() - start_overall_time
+                estimated_time_per_website = elapsed_time / (idx + 1)
                 time_remaining = estimated_time_per_website * (len(websites) - (idx + 1))
 
                 # Update UI
