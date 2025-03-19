@@ -33,7 +33,7 @@ def load_google_sheet(sheet_url):
 def extract_emails(text):
     return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
 
-# Timer-controlled email extraction
+# Timer-controlled email extraction with strict timeout
 def extract_emails_with_timeout(url, time_limit=60):
     emails_found = set()
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -47,6 +47,7 @@ def extract_emails_with_timeout(url, time_limit=60):
                 response = client.get(url, headers=headers)
                 soup = BeautifulSoup(response.text, "html.parser")
 
+                # Extract emails from page content
                 emails_found.update(extract_emails(response.text))
                 emails_found.update(extract_emails(str(soup.find_all("meta"))))
                 emails_found.update(extract_emails(" ".join([str(s) for s in soup.find_all("script")])))
@@ -54,26 +55,34 @@ def extract_emails_with_timeout(url, time_limit=60):
                 # Extract emails from mailto links
                 emails_found.update(extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]])))
 
-                # Find internal links
-                internal_links = [urljoin(url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
+                # Find internal links (limit to 5 links for efficiency)
+                internal_links = list(set(
+                    urljoin(url, a["href"]) for a in soup.find_all("a", href=True)
+                    if urlparse(a["href"]).netloc == domain
+                ))[:5]
 
                 for link in internal_links:
                     if time.time() - start_time > time_limit:
                         break  # Stop processing if time exceeded
                     try:
-                        response = client.get(link, headers=headers)
+                        response = client.get(link, headers=headers, timeout=10)
                         emails_found.update(extract_emails(response.text))
+                    except httpx.TimeoutException:
+                        st.warning(f"⏳ Timeout on {link}, skipping...")
                     except Exception:
                         pass  # Ignore broken links
-        except Exception:
-            pass  # Ignore failed requests
+        except httpx.TimeoutException:
+            st.warning(f"⏳ Timeout on {url}, skipping...")
+        except Exception as e:
+            st.error(f"Error fetching {url}: {e}")
 
-    # Run fetch_emails in a separate thread with a time limit
-    email_thread = threading.Thread(target=fetch_emails)
+    # Run fetch_emails in a separate thread with a hard timeout
+    email_thread = threading.Thread(target=fetch_emails, daemon=True)
     email_thread.start()
     email_thread.join(timeout=time_limit)  # Stop thread after time_limit
 
     return emails_found
+
 
 # Main UI
 st.title("FunnelStrike's Email Extractor")
