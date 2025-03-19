@@ -4,6 +4,7 @@ import httpx
 import re
 import io
 import time
+import threading
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
@@ -32,41 +33,45 @@ def load_google_sheet(sheet_url):
 def extract_emails(text):
     return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
 
-# Extract emails from a webpage within the time limit
+# Timer-controlled email extraction
 def extract_emails_with_timeout(url, time_limit=60):
-    start_time = time.time()
     emails_found = set()
     headers = {"User-Agent": "Mozilla/5.0"}
+    domain = urlparse(url).netloc
+    start_time = time.time()
 
-    try:
-        with httpx.Client(timeout=10, follow_redirects=True) as client:
-            response = client.get(url, headers=headers)
-            soup = BeautifulSoup(response.text, "html.parser")
+    def fetch_emails():
+        nonlocal emails_found
+        try:
+            with httpx.Client(timeout=10, follow_redirects=True) as client:
+                response = client.get(url, headers=headers)
+                soup = BeautifulSoup(response.text, "html.parser")
 
-            emails_found.update(extract_emails(response.text))
-            emails_found.update(extract_emails(str(soup.find_all("meta"))))
-            emails_found.update(extract_emails(" ".join([str(s) for s in soup.find_all("script")])))
-            emails_found.update(extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]])))
+                emails_found.update(extract_emails(response.text))
+                emails_found.update(extract_emails(str(soup.find_all("meta"))))
+                emails_found.update(extract_emails(" ".join([str(s) for s in soup.find_all("script")])))
 
-            # Stop if time exceeded
-            if time.time() - start_time > time_limit:
-                return set()
+                # Extract emails from mailto links
+                emails_found.update(extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]])))
 
-            # Find internal links & crawl them within time
-            domain = urlparse(url).netloc
-            internal_links = [urljoin(url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
+                # Find internal links
+                internal_links = [urljoin(url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
 
-            for link in internal_links:
-                if time.time() - start_time > time_limit:
-                    break  # Stop processing if time exceeded
-                try:
-                    response = client.get(link, headers=headers)
-                    emails_found.update(extract_emails(response.text))
-                except Exception:
-                    pass  # Ignore broken links
-            
-    except Exception:
-        return set()
+                for link in internal_links:
+                    if time.time() - start_time > time_limit:
+                        break  # Stop processing if time exceeded
+                    try:
+                        response = client.get(link, headers=headers)
+                        emails_found.update(extract_emails(response.text))
+                    except Exception:
+                        pass  # Ignore broken links
+        except Exception:
+            pass  # Ignore failed requests
+
+    # Run fetch_emails in a separate thread with a time limit
+    email_thread = threading.Thread(target=fetch_emails)
+    email_thread.start()
+    email_thread.join(timeout=time_limit)  # Stop thread after time_limit
 
     return emails_found
 
@@ -98,7 +103,7 @@ if sheet_url:
 
             for idx, website in enumerate(websites):
                 start_time = time.time()
-                emails = extract_emails_with_timeout(website, time_limit=60)  # 1 min per website
+                emails = extract_emails_with_timeout(website, time_limit=60)  # 1 min max per website
                 
                 # If timeout, show warning
                 if time.time() - start_time >= 60:
