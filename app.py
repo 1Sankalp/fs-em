@@ -3,6 +3,7 @@ import pandas as pd
 import httpx
 import re
 import io
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
@@ -50,16 +51,21 @@ def extract_emails_from_page(url):
         return set()
 
 # Crawl internal links to find more emails
-def crawl_emails(url, depth=1):
+def crawl_emails(url, depth=1, time_limit=60):
     visited, emails = set(), set()
+    start_time = time.time()
 
     def fetch_emails(page_url, level):
-        if level > depth or page_url in visited:
+        if level > depth or page_url in visited or (time.time() - start_time) > time_limit:
             return
         visited.add(page_url)
 
         found_emails = extract_emails_from_page(page_url)
         emails.update(found_emails)
+
+        # Stop crawling if time limit exceeded
+        if (time.time() - start_time) > time_limit:
+            return
 
         # Find more links on the same domain
         try:
@@ -98,17 +104,34 @@ if sheet_url:
             total_emails_extracted = 0
             progress_bar = st.progress(0)
             progress_text = st.empty()
+            time_text = st.empty()
+
+            start_overall_time = time.time()
+            estimated_time_per_website = 10  # Initial estimate
 
             for idx, website in enumerate(websites):
-                emails = crawl_emails(website, depth=1)  # Set crawl depth
+                start_time = time.time()
+                emails = crawl_emails(website, depth=1, time_limit=60)  # 1 min per website
+                
+                # If timeout, show warning
+                if (time.time() - start_time) >= 60:
+                    st.warning(f"⚠️ Skipped {website} (took too long)")
+
                 email_count = len(emails)
                 total_emails_extracted += email_count
                 results.append({"Website": website, "Emails": ", ".join(emails)})
-                
+
+                # Calculate estimated remaining time
+                time_spent = time.time() - start_overall_time
+                estimated_time_per_website = time_spent / (idx + 1)
+                time_remaining = estimated_time_per_website * (len(websites) - (idx + 1))
+
+                # Update UI
                 percent_done = int(((idx + 1) / len(websites)) * 100)
                 progress_text.text(f"Processing {idx+1}/{len(websites)} ({percent_done}%) - Emails Found: {total_emails_extracted}")
+                time_text.text(f"⏳ Estimated Time Remaining: {int(time_remaining // 60)} min {int(time_remaining % 60)} sec")
                 progress_bar.progress((idx + 1) / len(websites))
-            
+
             st.success(f"✅ Extraction Complete! Total Emails Extracted: {total_emails_extracted}")
             results_df = pd.DataFrame(results)
             st.dataframe(results_df, height=300)
