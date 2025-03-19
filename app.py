@@ -1,209 +1,100 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
+import httpx
 import re
-import time
-import pyperclip
-from io import StringIO
-from urllib.parse import urlparse
+import io
 
-st.set_page_config(page_title="Website Email Extractor", layout="wide")
+st.set_page_config(page_title="Email Extractor", layout="centered")
 
-def extract_domain(url):
-    """Extract domain from URL"""
-    try:
-        parsed_uri = urlparse(url)
-        if not parsed_uri.scheme:
-            url = 'http://' + url
-            parsed_uri = urlparse(url)
-        domain = '{uri.netloc}'.format(uri=parsed_uri)
-        return domain
-    except:
-        return url
+# Convert Google Sheet link to CSV export link
+def convert_to_csv_link(sheet_url):
+    if "docs.google.com" in sheet_url and "/d/" in sheet_url:
+        sheet_id = sheet_url.split("/d/")[1].split("/")[0]
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    return None
 
-def extract_emails(url):
-    """Extract emails from a website"""
-    emails = []
-    try:
-        # Add http:// if not present
-        if not url.startswith('http'):
-            url = 'http://' + url
-            
-        # Request website content
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        # Find emails using regex
-        if response.status_code == 200:
-            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Extract from text content
-            text_content = soup.get_text()
-            found_emails = re.findall(email_pattern, text_content)
-            
-            # Extract from mailto links
-            mailto_links = soup.select('a[href^="mailto:"]')
-            for link in mailto_links:
-                href = link.get('href')
-                email = href.replace('mailto:', '').split('?')[0]
-                if re.match(email_pattern, email):
-                    found_emails.append(email)
-            
-            # Remove duplicates and clean
-            emails = list(set(found_emails))
-    except Exception as e:
-        st.error(f"Error processing {url}: {str(e)}")
-        return []
+# Fetch data from Google Sheet
+def load_google_sheet(sheet_url):
+    csv_url = convert_to_csv_link(sheet_url)
+    if not csv_url:
+        return None, "Invalid Google Sheet URL"
     
-    return emails
-
-def get_dataframe_from_gsheet_url(sheet_url):
-    """Extract data from Google Sheets URL"""
     try:
-        # Convert to CSV export URL
-        if "spreadsheets/d/" in sheet_url:
-            sheet_id = sheet_url.split('spreadsheets/d/')[1].split('/')[0]
-            export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-            
-            # Download the CSV data
-            response = requests.get(export_url)
-            if response.status_code == 200:
-                data = StringIO(response.content.decode('utf-8'))
-                df = pd.read_csv(data)
-                return df, None
-            else:
-                return None, f"Failed to access sheet: HTTP {response.status_code}"
-        else:
-            return None, "Invalid Google Sheets URL"
+        df = pd.read_csv(csv_url)
+        return df, None
     except Exception as e:
-        return None, f"Error processing sheet: {str(e)}"
+        return None, f"Error loading Google Sheet: {e}"
 
-# Custom CSS for the scrollable container
-st.markdown("""
-    <style>
-    .scrollable-container {
-        height: 400px;
-        overflow-y: auto;
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        padding: 10px;
-    }
-    .stButton button {
-        width: 50%;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# Extract emails from website
+def extract_emails_from_website(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    try:
+        response = httpx.get(url, timeout=10, follow_redirects=True, headers=headers)
+        emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", response.text))
+        return ", ".join(emails) if emails else ""
+    except:
+        return ""
 
-# App title and description
-st.title("Website Email Extractor")
-st.markdown("Extract emails from websites listed in your Google Sheet")
+# UI
+st.title("FunnelStrike's Website Email Extractor")
+st.write("Paste your **Google Sheet link** (it must have a 'Website' column):")
 
-# Input for Google Sheet URL
-sheet_url = st.text_input("Enter Google Sheet URL (must be publicly accessible)")
+# Input field for Google Sheet link
+sheet_url = st.text_input("Google Sheet URL")
 
-# Column selection
-website_column = None
 if sheet_url:
-    df, error = get_dataframe_from_gsheet_url(sheet_url)
+    df, error = load_google_sheet(sheet_url)
+    
     if error:
         st.error(error)
-    elif df is not None:
-        st.success("Sheet loaded successfully!")
-        
-        # Show column selection dropdown
-        columns = df.columns.tolist()
-        website_column = st.selectbox("Select the column containing website URLs", columns)
+    elif "Website" not in df.columns:
+        st.error("❌ The Google Sheet must contain a 'Website' column!")
+    else:
+        websites = df["Website"].dropna().tolist()
+        st.success(f"✅ Loaded {len(websites)} websites")
 
-# Button to start extraction
-if website_column and st.button("Find Emails"):
-    # Create a container for the results
-    results_container = st.container()
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    # Extract website column and prepare results
-    websites = df[website_column].tolist()
-    total_sites = len(websites)
-    
-    # Initialize results dataframe
-    results_df = pd.DataFrame(columns=["Website", "Emails"])
-    
-    # Process each website
-    for i, website in enumerate(websites):
-        if pd.notna(website) and website.strip() != "":
-            status_text.text(f"Processing {i+1}/{total_sites}: {website}")
-            
-            # Clean up URL if needed
-            clean_url = website.strip()
-            domain = extract_domain(clean_url)
-            
-            # Extract emails
-            emails = extract_emails(clean_url)
-            
-            # Add to results
-            results_df.loc[len(results_df)] = {
-                "Website": clean_url,
-                "Emails": ", ".join(emails) if emails else "No emails found"
-            }
-            
-            # Update progress
-            progress_bar.progress((i + 1) / total_sites)
-            time.sleep(0.1)  # Small delay to show progress
-    
-    # Show completion message
-    status_text.text(f"Completed! Processed {total_sites} websites.")
-    
-    # Display results in a scrollable container
-    with results_container:
-        st.subheader("Extraction Results")
-        
-        if not results_df.empty:
-            # Format the dataframe for display
-            display_df = results_df.copy()
-            
-            # Create hyperlinks for websites
-            display_df["Website"] = display_df["Website"].apply(
-                lambda x: f'<a href="{x if x.startswith("http") else "http://" + x}" target="_blank">{x}</a>'
+        # Button to start extraction
+        if st.button("Find Emails"):
+            results = []
+            total_emails_extracted = 0
+            progress_bar = st.progress(0)
+            progress_text = st.empty()  # Placeholder for dynamic text updates
+
+            for idx, website in enumerate(websites):
+                emails = extract_emails_from_website(website)
+                email_count = len(emails.split(", ")) if emails else 0
+                total_emails_extracted += email_count
+
+                results.append({"Website": website, "Emails": emails})
+
+                # Update progress
+                percent_done = int(((idx + 1) / len(websites)) * 100)
+                progress_text.text(f"Processing {idx+1}/{len(websites)} ({percent_done}%) - Emails Found: {total_emails_extracted}")
+                progress_bar.progress((idx + 1) / len(websites))
+
+            st.success(f"✅ Extraction Complete! Total Emails Extracted: {total_emails_extracted}")
+
+            # Convert to DataFrame
+            results_df = pd.DataFrame(results)
+
+            # Display results in scrollable container
+            st.dataframe(results_df, height=300)
+
+            # Convert to tab-separated values (works well in Google Sheets)
+            output_str = "Website\tEmails\n" + "\n".join(
+                [f"{row['Website']}\t{row['Emails']}" for _, row in results_df.iterrows()]
             )
-            
-            # Display in scrollable container with HTML
-            st.markdown('<div class="scrollable-container">', unsafe_allow_html=True)
-            st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Create a copy button
-            if st.button("Copy to Clipboard"):
-                # Format for clipboard (ensure URLs are properly formatted)
-                clipboard_text = ""
-                for _, row in results_df.iterrows():
-                    clipboard_text += f"{row['Website']}\t{row['Emails']}\n"
-                
-                # Use JavaScript to copy to clipboard
-                st.markdown(
-                    f"""
-                    <script>
-                    const textToCopy = `{clipboard_text}`;
-                    navigator.clipboard.writeText(textToCopy)
-                        .then(() => console.log('Copied to clipboard'))
-                        .catch(err => console.error('Error copying text: ', err));
-                    </script>
-                    """,
-                    unsafe_allow_html=True
-                )
-                
-                st.success("Results copied to clipboard! Paste it into your Google Sheet.")
-        else:
-            st.warning("No results found. Check if the website URLs are valid.")
 
-# Instructions at the bottom
-st.markdown("---")
-st.markdown("""
-### Instructions:
-1. Make sure your Google Sheet is publicly accessible (set to "Anyone with the link can view")
-2. Paste the Google Sheet URL above
-3. Select the column containing website URLs
-4. Click "Find Emails" to start extraction
-5. Use the "Copy to Clipboard" button to copy results for pasting into your sheet
-""")
+            # Copy button using Streamlit workaround
+            st.text_area("Copy the data below:", output_str, height=150)
+
+            # Download CSV button
+            csv_buffer = io.StringIO()
+            results_df.to_csv(csv_buffer, index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_buffer.getvalue(),
+                file_name="extracted_emails.csv",
+                mime="text/csv"
+            )
