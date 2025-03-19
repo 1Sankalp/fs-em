@@ -3,8 +3,11 @@ import pandas as pd
 import httpx
 import re
 import io
+import asyncio
+import whois
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Email Extractor", layout="centered")
+st.set_page_config(page_title="FunnelStrike Email Extractor", layout="centered")
 
 # Convert Google Sheet link to CSV export link
 def convert_to_csv_link(sheet_url):
@@ -25,22 +28,38 @@ def load_google_sheet(sheet_url):
     except Exception as e:
         return None, f"Error loading Google Sheet: {e}"
 
-# Extract emails from website
+# Extract emails using regex
+def extract_emails(text):
+    emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
+    return emails
+
+# Extract emails from website async
 def extract_emails_from_website(url):
     headers = {"User-Agent": "Mozilla/5.0"}
-    
     try:
         response = httpx.get(url, timeout=10, follow_redirects=True, headers=headers)
-        emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", response.text))
-        return ", ".join(emails) if emails else ""
-    except:
-        return ""
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            emails = extract_emails(response.text)
+            metadata_emails = extract_emails(str(soup.find_all("meta")))
+            return emails.union(metadata_emails)
+    except Exception:
+        return set()
+    return set()
 
-# UI
-st.title("FunnelStrike's Website Email Extractor")
-st.write("Paste your **Google Sheet link** (it must have a 'Website' column):")
+# Extract emails from WHOIS data
+def extract_emails_from_whois(domain):
+    try:
+        w = whois.whois(domain)
+        whois_text = str(w)
+        return extract_emails(whois_text)
+    except Exception:
+        return set()
 
-# Input field for Google Sheet link
+# Main UI
+st.title("FunnelStrike's Email Extractor")
+st.write("Paste your **Google Sheet link** (must have a 'Website' column):")
+
 sheet_url = st.text_input("Google Sheet URL")
 
 if sheet_url:
@@ -54,42 +73,30 @@ if sheet_url:
         websites = df["Website"].dropna().tolist()
         st.success(f"✅ Loaded {len(websites)} websites")
 
-        # Button to start extraction
         if st.button("Find Emails"):
             results = []
             total_emails_extracted = 0
             progress_bar = st.progress(0)
-            progress_text = st.empty()  # Placeholder for dynamic text updates
+            progress_text = st.empty()
 
             for idx, website in enumerate(websites):
+                domain = website.replace("https://", "").replace("http://", "").split("/")[0]
                 emails = extract_emails_from_website(website)
-                email_count = len(emails.split(", ")) if emails else 0
+                if not emails:
+                    emails = extract_emails_from_whois(domain)
+                
+                email_count = len(emails)
                 total_emails_extracted += email_count
-
-                results.append({"Website": website, "Emails": emails})
-
-                # Update progress
+                results.append({"Website": website, "Emails": ", ".join(emails)})
+                
                 percent_done = int(((idx + 1) / len(websites)) * 100)
                 progress_text.text(f"Processing {idx+1}/{len(websites)} ({percent_done}%) - Emails Found: {total_emails_extracted}")
                 progress_bar.progress((idx + 1) / len(websites))
-
+            
             st.success(f"✅ Extraction Complete! Total Emails Extracted: {total_emails_extracted}")
-
-            # Convert to DataFrame
             results_df = pd.DataFrame(results)
-
-            # Display results in scrollable container
             st.dataframe(results_df, height=300)
 
-            # Convert to tab-separated values (works well in Google Sheets)
-            output_str = "Website\tEmails\n" + "\n".join(
-                [f"{row['Website']}\t{row['Emails']}" for _, row in results_df.iterrows()]
-            )
-
-            # Copy button using Streamlit workaround
-            st.text_area("Copy the data below:", output_str, height=150)
-
-            # Download CSV button
             csv_buffer = io.StringIO()
             results_df.to_csv(csv_buffer, index=False)
             st.download_button(
