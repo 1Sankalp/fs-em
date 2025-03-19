@@ -2,4 +2,3 @@ streamlit
 pandas
 httpx
 beautifulsoup4
-selenium
