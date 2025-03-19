@@ -3,7 +3,6 @@ import pandas as pd
 import httpx
 import re
 import io
-import asyncio
 import whois
 from bs4 import BeautifulSoup
 
@@ -30,10 +29,9 @@ def load_google_sheet(sheet_url):
 
 # Extract emails using regex
 def extract_emails(text):
-    emails = set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
-    return emails
+    return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
 
-# Extract emails from website async
+# Extract emails from website
 def extract_emails_from_website(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -51,8 +49,7 @@ def extract_emails_from_website(url):
 def extract_emails_from_whois(domain):
     try:
         w = whois.whois(domain)
-        whois_text = str(w)
-        return extract_emails(whois_text)
+        return extract_emails(str(w))
     except Exception:
         return set()
 
@@ -81,9 +78,7 @@ if sheet_url:
 
             for idx, website in enumerate(websites):
                 domain = website.replace("https://", "").replace("http://", "").split("/")[0]
-                emails = extract_emails_from_website(website)
-                if not emails:
-                    emails = extract_emails_from_whois(domain)
+                emails = extract_emails_from_website(website) or extract_emails_from_whois(domain)
                 
                 email_count = len(emails)
                 total_emails_extracted += email_count
