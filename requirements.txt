@@ -1,7 +1,5 @@
 streamlit
 pandas
 httpx
-asyncio
-whois
 beautifulsoup4
 selenium

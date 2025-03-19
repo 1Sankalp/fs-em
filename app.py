@@ -3,8 +3,8 @@ import pandas as pd
 import httpx
 import re
 import io
-import whois
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
 st.set_page_config(page_title="FunnelStrike Email Extractor", layout="centered")
 
@@ -31,28 +31,50 @@ def load_google_sheet(sheet_url):
 def extract_emails(text):
     return set(re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text))
 
-# Extract emails from a webpage
-def extract_emails_from_website(url):
+# Extract emails from a single webpage
+def extract_emails_from_page(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         response = httpx.get(url, timeout=10, follow_redirects=True, headers=headers)
         soup = BeautifulSoup(response.text, "html.parser")
+        
         emails = extract_emails(response.text)
         metadata_emails = extract_emails(str(soup.find_all("meta")))
+        comment_emails = extract_emails(" ".join([str(c) for c in soup.find_all(string=lambda t: isinstance(t, str) and t.startswith("<!--"))]))
+        script_emails = extract_emails(" ".join([str(s) for s in soup.find_all("script")]))
         mailto_emails = extract_emails(" ".join([a["href"] for a in soup.find_all("a", href=True) if "mailto:" in a["href"]]))
 
-        return emails.union(metadata_emails, mailto_emails)
-    except Exception:
-        return set()
-    return set()
+        return emails.union(metadata_emails, comment_emails, script_emails, mailto_emails)
 
-# Extract emails from WHOIS data
-def extract_emails_from_whois(domain):
-    try:
-        w = whois.whois(domain)
-        return extract_emails(str(w))
     except Exception:
         return set()
+
+# Crawl internal links to find more emails
+def crawl_emails(url, depth=1):
+    visited, emails = set(), set()
+
+    def fetch_emails(page_url, level):
+        if level > depth or page_url in visited:
+            return
+        visited.add(page_url)
+
+        found_emails = extract_emails_from_page(page_url)
+        emails.update(found_emails)
+
+        # Find more links on the same domain
+        try:
+            response = httpx.get(page_url, timeout=10, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(response.text, "html.parser")
+            domain = urlparse(url).netloc
+            internal_links = [urljoin(page_url, a["href"]) for a in soup.find_all("a", href=True) if urlparse(a["href"]).netloc == domain]
+            
+            for link in internal_links:
+                fetch_emails(link, level + 1)
+        except Exception:
+            pass
+
+    fetch_emails(url, 0)
+    return emails
 
 # Main UI
 st.title("FunnelStrike's Email Extractor")
@@ -78,9 +100,7 @@ if sheet_url:
             progress_text = st.empty()
 
             for idx, website in enumerate(websites):
-                domain = website.replace("https://", "").replace("http://", "").split("/")[0]
-                emails = extract_emails_from_website(website) or extract_emails_from_whois(domain)
-                
+                emails = crawl_emails(website, depth=1)  # Set crawl depth
                 email_count = len(emails)
                 total_emails_extracted += email_count
                 results.append({"Website": website, "Emails": ", ".join(emails)})
