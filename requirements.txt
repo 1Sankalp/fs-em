@@ -3,3 +3,4 @@ pandas
 httpx
 asyncio
 whois
+beautifulsoup4
