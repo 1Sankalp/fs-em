@@ -2,3 +2,5 @@ streamlit
 pandas
 httpx
 beautifulsoup4
+pyperclip
+requests
