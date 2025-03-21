@@ -4,3 +4,5 @@ httpx
 beautifulsoup4
 pyperclip
 requests
+tldextract
+difflib
