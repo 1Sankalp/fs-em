@@ -373,13 +373,24 @@ if sheet_url:
 
             # Display an easily copyable table with more compact styling
             st.markdown("### Extracted Emails Table")
-            
-            # Create a scrollable container with fixed height
-            st.markdown("""
-                <div style="height: 400px; overflow-y: auto; border: 1px solid #e6e6e6; border-radius: 5px;">
-                    {}
+
+            # Calculate the height based on the number of rows
+            row_height = 30  # Height per row in pixels
+            max_rows_visible = 10  # Maximum rows visible without scrolling
+            header_height = 40  # Height of the header row in pixels
+
+            # Set the container height to fit up to 10 rows
+            if len(result_df) <= max_rows_visible:
+                table_height = header_height + (len(result_df) * row_height)  # Exact height for all rows
+            else:
+                table_height = header_height + (max_rows_visible * row_height)  # Fixed height for 10 rows
+
+            # Create a scrollable container with dynamic height
+            st.markdown(f"""
+                <div style="height: {table_height}px; overflow-y: auto; border: 1px solid #e6e6e6; border-radius: 5px;">
+                    {result_df.to_html(index=False, escape=False, classes="compact-table")}
                 </div>
-            """.format(result_df.to_html(index=False, escape=False, classes="compact-table")), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
             # Convert DF for download
             def convert_df(df):
